@@ -91,6 +91,11 @@ volatile uint8_t 		tx_buffer_id = 0;
 volatile uint8_t 		tx_busy = 0;
 
 volatile uint8_t 		acquiring = 0;
+volatile uint8_t 		stopping = 0;
+
+volatile uint8_t 		partial_buffer_id = 0;
+volatile uint16_t 		partial_length = 0;
+volatile uint8_t 		partial_pending = 0;
 
 volatile uint32_t 		dropped_samples = 0;
 
@@ -231,27 +236,78 @@ void service_uart(void)
     if (tx_busy)
         return;
 
+    /* First priority: transmit complete READY buffers */
     for (uint8_t i = 0; i < 2; i++)
     {
         if (buffer_state[i] == BUF_READY)
         {
             tx_buffer_id = i;
             tx_busy = 1;
-
             buffer_state[i] = BUF_TX;
 
-            if (HAL_UART_Transmit_DMA(
-                    &huart2,
-                    buffers[i],
-                    BUFFER_SIZE) != HAL_OK)
+            if (HAL_UART_Transmit_DMA(&huart2,
+                                      buffers[i],
+                                      BUFFER_SIZE) != HAL_OK)
             {
                 buffer_state[i] = BUF_READY;
                 tx_busy = 0;
             }
 
-            break;
+            return;
         }
     }
+
+    /* Then transmit the final partial buffer */
+    if (stopping && partial_pending)
+    {
+        tx_buffer_id = partial_buffer_id;
+        tx_busy = 1;
+        partial_pending = 0;
+
+        buffer_state[tx_buffer_id] = BUF_TX;
+
+        if (HAL_UART_Transmit_DMA(&huart2,
+                                  buffers[tx_buffer_id],
+                                  partial_length) != HAL_OK)
+        {
+            buffer_state[tx_buffer_id] = BUF_FILLING;
+            partial_pending = 1;
+            tx_busy = 0;
+        }
+
+        return;
+    }
+}
+
+void service_stop(void)
+{
+    if (!stopping)
+        return;
+
+    if (tx_busy)
+        return;
+
+    if (buffer_state[0] == BUF_READY ||
+        buffer_state[1] == BUF_READY)
+        return;
+
+    if (partial_pending)
+        return;
+
+    uint8_t stop_msg[] = {
+        0xAA, 0x55, 0xAA, 0x55,
+        0xAA, 0x55, 0xAA, 0x55
+    };
+
+    HAL_UART_Transmit(&huart2,
+                      stop_msg,
+                      sizeof(stop_msg),
+                      HAL_MAX_DELAY);
+
+    buffer_state[0] = BUF_FREE;
+    buffer_state[1] = BUF_FREE;
+
+    stopping = 0;
 }
 
 void start_program(void)
@@ -289,37 +345,35 @@ void start_program(void)
 
 void stop_program(void)
 {
-	stop_time = HAL_GetTick();
     uint8_t dummy[6];
 
-    /* Stop new samples first */
+    stop_time = HAL_GetTick();
+
+    /* Stop NEW samples first */
     HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
     acquiring = 0;
 
-    adxl_write(0x2E, 0x00);        // disable DATA_READY interrupt
-    adxl_read(0x32, dummy, 6);     // clear pending DATA_READY
+    adxl_write(0x2E, 0x00);      // disable DATA_READY
+    adxl_read(0x32, dummy, 6);   // clear DATA_READY
     __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_5);
 
-    /* Stop current DMA transmission */
-    HAL_UART_DMAStop(&huart2);
+    /* Remember valid part of current filling buffer */
+    partial_buffer_id = fill_buffer_id;
+    partial_length = fill_index;
 
-    tx_busy = 0;
+    if (partial_length > 0)
+        partial_pending = 1;
+    else
+        partial_pending = 0;
 
-    buffer_state[0] = BUF_FREE;
-    buffer_state[1] = BUF_FREE;
+    /*
+     * DO NOT:
+     * HAL_UART_DMAStop()
+     * reset buffer states
+     * send STOP marker yet
+     */
 
-    /* Send explicit end-of-measurement marker */
-    uint8_t stop_msg[] = {
-        0xAA, 0x55, 0xAA, 0x55,
-        0xAA, 0x55, 0xAA, 0x55
-    };
-
-    HAL_UART_Transmit(
-        &huart2,
-        stop_msg,
-        sizeof(stop_msg),
-        HAL_MAX_DELAY
-    );
+    stopping = 1;
 }
 
 /* USER CODE END 0 */
@@ -357,7 +411,7 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  adxl_init(ADXL_RANGE_4G, ADXL_400_HZ);
+  adxl_init(ADXL_RANGE_4G, ADXL_1600_HZ);
   adxl_read(0x2C, &bw_rate_readback, 1);
   HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
 
@@ -391,10 +445,11 @@ int main(void)
 	      HAL_Delay(20);  // debounce release
 	  }
 
-	if (acquiring)
-	{
-		service_uart();
-	}
+	  if (acquiring || stopping)
+	      service_uart();
+
+	  if (stopping)
+	      service_stop();
 
   }
   /* USER CODE END 3 */
