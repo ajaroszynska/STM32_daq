@@ -45,6 +45,7 @@
 #define ADXL_3200_HZ	0x0F
 #define ADXL_1600_HZ	0x0E
 #define ADXL_800_HZ		0x0D
+#define ADXL_400_HZ 0x0C
 // 3072 / 6 bytes per ADXL345 sample = 512 samples
 
 typedef enum
@@ -77,6 +78,7 @@ volatile uint32_t dropped_buffer0 = 0;
 volatile uint32_t dropped_buffer1 = 0;
 volatile uint32_t tx0_complete = 0;
 volatile uint32_t tx1_complete = 0;
+uint8_t bw_rate_readback = 0;
 
 uint8_t buffers[2][BUFFER_SIZE];
 
@@ -355,7 +357,8 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  adxl_init(ADXL_RANGE_4G, ADXL_1600_HZ);
+  adxl_init(ADXL_RANGE_4G, ADXL_400_HZ);
+  adxl_read(0x2C, &bw_rate_readback, 1);
   HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
 
 
@@ -369,18 +372,24 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	if (!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
-	{
-		start_stop ^= 1;
-		HAL_Delay(500);
-		if (start_stop == 1)
-		{
-			start_program();
-		} else
-		{
-			stop_program();
-		}
-	}
+	  if (!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
+	  {
+	      start_stop ^= 1;
+
+	      if (start_stop == 1)
+	          start_program();
+	      else
+	          stop_program();
+
+	      HAL_Delay(20);  // simple debounce
+
+	      while (!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
+	      {
+	          // wait until button is released
+	      }
+
+	      HAL_Delay(20);  // debounce release
+	  }
 
 	if (acquiring)
 	{
