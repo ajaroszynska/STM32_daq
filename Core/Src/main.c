@@ -79,6 +79,7 @@ volatile uint32_t dropped_buffer1 = 0;
 volatile uint32_t tx0_complete = 0;
 volatile uint32_t tx1_complete = 0;
 uint8_t bw_rate_readback = 0;
+volatile uint8_t exti_monitor;
 
 uint8_t buffers[2][BUFFER_SIZE];
 
@@ -169,6 +170,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin != GPIO_PIN_5)
         return;
+
+    exti_monitor ^= 1;
 
     uint8_t dummy[6];
 
@@ -425,7 +428,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
 	  if (!HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13))
 	  {
 	      start_stop ^= 1;
