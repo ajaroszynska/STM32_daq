@@ -45,7 +45,7 @@
 #define ADXL_3200_HZ	0x0F
 #define ADXL_1600_HZ	0x0E
 #define ADXL_800_HZ		0x0D
-#define ADXL_400_HZ 0x0C
+#define ADXL_400_HZ 	0x0C
 // 3072 / 6 bytes per ADXL345 sample = 512 samples
 
 typedef enum
@@ -66,6 +66,8 @@ typedef enum
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim2;
+
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_tx;
 
@@ -74,12 +76,12 @@ volatile uint8_t 		start_stop = 0;
 volatile uint32_t 		sample_count = 0; // testing fs
 volatile uint32_t 		start_time = 0; // testing fs
 volatile uint32_t 		stop_time = 0; // testing fs
-volatile uint32_t dropped_buffer0 = 0;
-volatile uint32_t dropped_buffer1 = 0;
-volatile uint32_t tx0_complete = 0;
-volatile uint32_t tx1_complete = 0;
-uint8_t bw_rate_readback = 0;
-volatile uint8_t exti_monitor;
+volatile uint32_t 		dropped_buffer0 = 0;
+volatile uint32_t 		dropped_buffer1 = 0;
+volatile uint32_t 		tx0_complete = 0;
+volatile uint32_t 		tx1_complete = 0;
+uint8_t 				bw_rate_readback = 0;
+volatile uint8_t 		exti_monitor;
 
 uint8_t buffers[2][BUFFER_SIZE];
 
@@ -100,6 +102,8 @@ volatile uint8_t 		partial_pending = 0;
 
 volatile uint32_t 		dropped_samples = 0;
 
+volatile uint32_t 		time_meas = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -108,6 +112,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -168,6 +173,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
+	time_meas = __HAL_TIM_GET_COUNTER(&htim2);
     if (GPIO_Pin != GPIO_PIN_5)
         return;
 
@@ -322,6 +328,10 @@ void start_program(void)
     tx0_complete = 0;
     tx1_complete = 0;
 
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    time_meas = __HAL_TIM_GET_COUNTER(&htim2);
+    HAL_TIM_Base_Start_IT(&htim2);
+
 
     HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
 
@@ -351,6 +361,7 @@ void stop_program(void)
     uint8_t dummy[6];
 
     stop_time = HAL_GetTick();
+    HAL_TIM_Base_Stop(&htim2);
 
     /* Stop NEW samples first */
     HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
@@ -413,6 +424,7 @@ int main(void)
   MX_DMA_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   adxl_init(ADXL_RANGE_4G, ADXL_1600_HZ);
   adxl_read(0x2C, &bw_rate_readback, 1);
@@ -537,6 +549,51 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 49;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 4294967295;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
