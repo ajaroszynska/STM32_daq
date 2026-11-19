@@ -33,7 +33,8 @@
 /* USER CODE BEGIN PD */
 #define SAMPLE_SIZE         6
 #define SAMPLES_PER_BUFFER  512
-#define BUFFER_SIZE         (SAMPLE_SIZE * SAMPLES_PER_BUFFER)
+// #define BUFFER_SIZE         (SAMPLE_SIZE * SAMPLES_PER_BUFFER)
+#define BUFFER_SIZE 		512
 
 #define ADXL_RANGE_2G   0x00
 #define ADXL_RANGE_4G   0x01
@@ -46,7 +47,6 @@
 #define ADXL_1600_HZ	0x0E
 #define ADXL_800_HZ		0x0D
 #define ADXL_400_HZ 	0x0C
-// 3072 / 6 bytes per ADXL345 sample = 512 samples
 
 typedef enum
 {
@@ -55,6 +55,13 @@ typedef enum
     BUF_READY,
     BUF_TX
 } BufferState;
+
+typedef struct
+{
+	uint32_t 	sample_time;
+	uint8_t 	xyz[6];
+	uint8_t 	reserved[2];
+} Sample;
 
 /* USER CODE END PD */
 
@@ -83,7 +90,7 @@ volatile uint32_t 		tx1_complete = 0;
 uint8_t 				bw_rate_readback = 0;
 volatile uint8_t 		exti_monitor;
 
-uint8_t buffers[2][BUFFER_SIZE];
+Sample buffers[2][BUFFER_SIZE];
 
 volatile BufferState 	buffer_state[2] = {BUF_FREE, BUF_FREE};
 
@@ -102,7 +109,7 @@ volatile uint8_t 		partial_pending = 0;
 
 volatile uint32_t 		dropped_samples = 0;
 
-volatile uint32_t 		time_meas = 0;
+volatile uint32_t 		sample_time = 0;
 
 /* USER CODE END PV */
 
@@ -173,20 +180,23 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	time_meas = __HAL_TIM_GET_COUNTER(&htim2);
-    if (GPIO_Pin != GPIO_PIN_5)
-        return;
+	sample_time = __HAL_TIM_GET_COUNTER(&htim2);
 
-    exti_monitor ^= 1;
 
-    uint8_t dummy[6];
+	if (GPIO_Pin != GPIO_PIN_5)
+	{
+		return;
+	}
 
-    if (!acquiring)
-    {
-        // Clear DATA_READY if an interrupt slips through
-        adxl_read(0x32, dummy, 6);
-        return;
-    }
+	uint8_t dummy[6];
+	exti_monitor ^= 1;
+
+	if (!acquiring)
+	{
+		// Clear DATA_READY if an interrupt slips through
+		adxl_read(0x32, dummy, 6);
+	    return;
+	}
 
     /*
      * A buffer may just have become free after UART transmission.
@@ -214,13 +224,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     /*
      * THIS is the one and only normal ADXL data read.
      */
+    buffers[fill_buffer_id][fill_index].sample_time = sample_time;
+
     adxl_read(
         0x32,
-        &buffers[fill_buffer_id][fill_index],
+        buffers[fill_buffer_id][fill_index].xyz,
         SAMPLE_SIZE
     );
     sample_count++;	// testing fs
-    fill_index += SAMPLE_SIZE;
+    fill_index++;
 
     if (fill_index >= BUFFER_SIZE)
     {
@@ -233,11 +245,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         {
             buffer_state[fill_buffer_id] = BUF_FILLING;
         }
-//        else
-//        {
-//            dropped_samples++;
-//        }
     }
+    return;
 }
 
 void service_uart(void)
@@ -255,8 +264,8 @@ void service_uart(void)
             buffer_state[i] = BUF_TX;
 
             if (HAL_UART_Transmit_DMA(&huart2,
-                                      buffers[i],
-                                      BUFFER_SIZE) != HAL_OK)
+            						  (const uint8_t *)buffers[i],
+									  sizeof(buffers[i])) != HAL_OK)
             {
                 buffer_state[i] = BUF_READY;
                 tx_busy = 0;
@@ -276,7 +285,7 @@ void service_uart(void)
         buffer_state[tx_buffer_id] = BUF_TX;
 
         if (HAL_UART_Transmit_DMA(&huart2,
-                                  buffers[tx_buffer_id],
+        						  (const uint8_t *)buffers[tx_buffer_id],
                                   partial_length) != HAL_OK)
         {
             buffer_state[tx_buffer_id] = BUF_FILLING;
@@ -317,6 +326,7 @@ void service_stop(void)
     buffer_state[1] = BUF_FREE;
 
     stopping = 0;
+
 }
 
 void start_program(void)
@@ -329,9 +339,7 @@ void start_program(void)
     tx1_complete = 0;
 
     __HAL_TIM_SET_COUNTER(&htim2, 0);
-    time_meas = __HAL_TIM_GET_COUNTER(&htim2);
-    HAL_TIM_Base_Start_IT(&htim2);
-
+    sample_time = __HAL_TIM_GET_COUNTER(&htim2);
 
     HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
 
@@ -350,10 +358,13 @@ void start_program(void)
 
     acquiring = 1;
 
-    adxl_write(0x2E, 0x80);        // enable DATA_READY
+    // adxl_write(0x2E, 0x80);        // enable DATA_READY
 
-    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+    // HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
     start_time = HAL_GetTick();
+    HAL_TIM_Base_Start(&htim2);
+    adxl_write(0x2E, 0x80);        // enable DATA_READY
+    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
 void stop_program(void)
@@ -373,7 +384,7 @@ void stop_program(void)
 
     /* Remember valid part of current filling buffer */
     partial_buffer_id = fill_buffer_id;
-    partial_length = fill_index;
+    partial_length = fill_index * sizeof(Sample);
 
     if (partial_length > 0)
         partial_pending = 1;
@@ -389,6 +400,8 @@ void stop_program(void)
 
     stopping = 1;
 }
+
+
 
 /* USER CODE END 0 */
 
@@ -571,7 +584,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 49;
+  htim2.Init.Prescaler = 99;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
