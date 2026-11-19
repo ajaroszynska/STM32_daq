@@ -81,8 +81,8 @@ DMA_HandleTypeDef hdma_usart2_tx;
 /* USER CODE BEGIN PV */
 volatile uint8_t 		start_stop = 0;
 volatile uint32_t 		sample_count = 0; // testing fs
-volatile uint32_t 		start_time = 0; // testing fs
-volatile uint32_t 		stop_time = 0; // testing fs
+// volatile uint32_t 		start_time = 0; // testing fs
+// volatile uint32_t 		stop_time = 0; // testing fs
 volatile uint32_t 		dropped_buffer0 = 0;
 volatile uint32_t 		dropped_buffer1 = 0;
 volatile uint32_t 		tx0_complete = 0;
@@ -361,7 +361,7 @@ void start_program(void)
     // adxl_write(0x2E, 0x80);        // enable DATA_READY
 
     // HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-    start_time = HAL_GetTick();
+    // start_time = HAL_GetTick();
     HAL_TIM_Base_Start(&htim2);
     adxl_write(0x2E, 0x80);        // enable DATA_READY
     HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
@@ -371,7 +371,7 @@ void stop_program(void)
 {
     uint8_t dummy[6];
 
-    stop_time = HAL_GetTick();
+    // stop_time = HAL_GetTick();
     HAL_TIM_Base_Stop(&htim2);
 
     /* Stop NEW samples first */
